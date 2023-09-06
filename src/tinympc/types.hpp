@@ -106,6 +106,7 @@ struct tiny_problem {
     int iter;
     int max_iter;
     int iters_check_rho_update;
+    int check_termination;
 
     // Temporaries for algorithm efficiency
     tiny_MatrixNxNh xg;
