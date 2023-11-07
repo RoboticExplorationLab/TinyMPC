@@ -9,8 +9,13 @@
 #include "problem_data/quadrotor_50hz_params_constrained.hpp"
 #include "trajectory_data/quadrotor_50hz_line_5s.hpp"
 // #include "trajectory_data/quadrotor_50hz_line_9s.hpp"
-
 using Eigen::Matrix;
+
+// Global variables
+struct tiny_cache cache;
+struct tiny_params params;
+struct tiny_problem problem;
+
 
 #define DEBUG_MODULE "TINYALG"
 
@@ -23,6 +28,79 @@ static uint64_t startTimestamp;
 void c_call_test(float x[12][10]){
     x[0][0] = -85.0;
     x[1][0] = -99.0;
+}
+
+void __attribute__ ((constructor)) initLibrary(void) {
+    //
+    // Function that is called when the library is loaded
+    //
+    // Copy data from problem_data/quadrotor*.hpp
+    cache.Adyn[0] = Eigen::Map<Matrix<tinytype, NSTATES, NSTATES, Eigen::RowMajor>>(Adyn_data);
+    cache.Bdyn[0] = Eigen::Map<Matrix<tinytype, NSTATES, NINPUTS, Eigen::RowMajor>>(Bdyn_data);
+    cache.rho[0] = rho_value;
+    cache.Kinf[0] = Eigen::Map<Matrix<tinytype, NINPUTS, NSTATES, Eigen::RowMajor>>(Kinf_data);
+    cache.Pinf[0] = Eigen::Map<Matrix<tinytype, NSTATES, NSTATES, Eigen::RowMajor>>(Pinf_data);
+    cache.Quu_inv[0] = Eigen::Map<Matrix<tinytype, NINPUTS, NINPUTS, Eigen::RowMajor>>(Quu_inv_data);
+    cache.AmBKt[0] = Eigen::Map<Matrix<tinytype, NSTATES, NSTATES, Eigen::RowMajor>>(AmBKt_data);
+    cache.coeff_d2p[0] = Eigen::Map<Matrix<tinytype, NSTATES, NINPUTS, Eigen::RowMajor>>(coeff_d2p_data);
+
+    cache.Adyn[1] = Eigen::Map<Matrix<tinytype, NSTATES, NSTATES, Eigen::RowMajor>>(Adyn_data);
+    cache.Bdyn[1] = Eigen::Map<Matrix<tinytype, NSTATES, NINPUTS, Eigen::RowMajor>>(Bdyn_data);
+    cache.rho[1] = rho_constrained_value;
+    cache.Kinf[1] = Eigen::Map<Matrix<tinytype, NINPUTS, NSTATES, Eigen::RowMajor>>(Kinf_constrained_data);
+    cache.Pinf[1] = Eigen::Map<Matrix<tinytype, NSTATES, NSTATES, Eigen::RowMajor>>(Pinf_constrained_data);
+    cache.Quu_inv[1] = Eigen::Map<Matrix<tinytype, NINPUTS, NINPUTS, Eigen::RowMajor>>(Quu_inv_constrained_data);
+    cache.AmBKt[1] = Eigen::Map<Matrix<tinytype, NSTATES, NSTATES, Eigen::RowMajor>>(AmBKt_constrained_data);
+    cache.coeff_d2p[1] = Eigen::Map<Matrix<tinytype, NSTATES, NINPUTS, Eigen::RowMajor>>(coeff_d2p_constrained_data);
+
+    params.Q[0] = Eigen::Map<tiny_VectorNx>(Q_data);
+    params.Qf[0] = Eigen::Map<tiny_VectorNx>(Qf_data);
+    params.R[0] = Eigen::Map<tiny_VectorNu>(R_data);
+    params.Q[1] = Eigen::Map<tiny_VectorNx>(Q_constrained_data);
+    params.Qf[1] = Eigen::Map<tiny_VectorNx>(Qf_constrained_data);
+    params.R[1] = Eigen::Map<tiny_VectorNu>(R_constrained_data);
+    tinytype u_hover[4] = {.65, .65, .65, .65};
+    params.u_min = tiny_VectorNu(-u_hover[0], -u_hover[1], -u_hover[2], -u_hover[3]).replicate<1, NHORIZON-1>();
+    params.u_max = tiny_VectorNu(1 - u_hover[0], 1 - u_hover[1], 1 - u_hover[2], 1 - u_hover[3]).replicate<1, NHORIZON-1>();
+    for (int i=0; i<NHORIZON; i++) {
+        params.x_min[i] = tiny_VectorNc::Constant(-1000); // Currently unused
+        // params.x_max[i] = tiny_VectorNc::Zero();
+        params.x_max[i] = tiny_VectorNc::Constant(1000);
+        // params.x_max[i](0) = x_max_given[i];
+        params.A_constraints[i] = tiny_MatrixNcNx::Zero();
+        // for (int j=0; j<3; j++) {
+        //     params.A_constraints[i](j) = A_ineq_given[j][i];
+        // }
+    }
+    params.Xref = tiny_MatrixNxNh::Zero();
+    params.Uref = tiny_MatrixNuNhm1::Zero();
+    params.cache = cache;
+
+    problem.x = tiny_MatrixNxNh::Zero();
+    problem.q = tiny_MatrixNxNh::Zero();
+    problem.p = tiny_MatrixNxNh::Zero();
+    problem.v = tiny_MatrixNxNh::Zero();
+    problem.vnew = tiny_MatrixNxNh::Zero();
+    problem.g = tiny_MatrixNxNh::Zero();
+
+    problem.u = tiny_MatrixNuNhm1::Zero();
+    problem.r = tiny_MatrixNuNhm1::Zero();
+    problem.d = tiny_MatrixNuNhm1::Zero();
+    problem.z = tiny_MatrixNuNhm1::Zero();
+    problem.znew = tiny_MatrixNuNhm1::Zero();
+    problem.y = tiny_MatrixNuNhm1::Zero();
+
+    problem.primal_residual_state = 0;
+    problem.primal_residual_input = 0;
+    problem.dual_residual_state = 0;
+    problem.dual_residual_input = 0;
+    problem.abs_tol = 0.001;
+    problem.status = 0;
+    problem.iter = 0;
+    problem.max_iter = 20;
+    problem.cache_level = 0; // 0 to use rho corresponding to inactive constraints (1 to use rho corresponding to active constraints)
+
+    printf("Problem is initialized\n");
 }
 
 void julia_sim_wrapper_solve_lqr(float x[12][10], float u[4][9]){
@@ -113,89 +191,11 @@ void julia_sim_wrapper_solve_lqr(float x[12][10], float u[4][9]){
 
 
 void julia_sim_wrapper_solve_admm(float x[NSTATES][NHORIZON], float u[NINPUTS][NHORIZON-1], int mpc_iter, float x_max_given[NHORIZON], float A_ineq_given[3][NHORIZON]){
-    // Copy data from problem_data/quadrotor*.hpp
-    struct tiny_cache cache;
-    // cache.Adyn = Eigen::Map<Matrix<tinytype, NSTATES, NSTATES, Eigen::RowMajor>>(Adyn_data);
-    // cache.Bdyn = Eigen::Map<Matrix<tinytype, NSTATES, NINPUTS, Eigen::RowMajor>>(Bdyn_data);
-    // cache.rho = rho_value;
-    // cache.Kinf = Eigen::Map<Matrix<tinytype, NINPUTS, NSTATES, Eigen::RowMajor>>(Kinf_data);
-    // cache.Pinf = Eigen::Map<Matrix<tinytype, NSTATES, NSTATES, Eigen::RowMajor>>(Pinf_data);
-    // cache.Quu_inv = Eigen::Map<Matrix<tinytype, NINPUTS, NINPUTS, Eigen::RowMajor>>(Quu_inv_data);
-    // cache.AmBKt = Eigen::Map<Matrix<tinytype, NSTATES, NSTATES, Eigen::RowMajor>>(AmBKt_data);
-    // cache.coeff_d2p = Eigen::Map<Matrix<tinytype, NSTATES, NINPUTS, Eigen::RowMajor>>(coeff_d2p_data);
-
-    cache.Adyn[0] = Eigen::Map<Matrix<tinytype, NSTATES, NSTATES, Eigen::RowMajor>>(Adyn_data);
-    cache.Bdyn[0] = Eigen::Map<Matrix<tinytype, NSTATES, NINPUTS, Eigen::RowMajor>>(Bdyn_data);
-    cache.rho[0] = rho_value;
-    cache.Kinf[0] = Eigen::Map<Matrix<tinytype, NINPUTS, NSTATES, Eigen::RowMajor>>(Kinf_data);
-    cache.Pinf[0] = Eigen::Map<Matrix<tinytype, NSTATES, NSTATES, Eigen::RowMajor>>(Pinf_data);
-    cache.Quu_inv[0] = Eigen::Map<Matrix<tinytype, NINPUTS, NINPUTS, Eigen::RowMajor>>(Quu_inv_data);
-    cache.AmBKt[0] = Eigen::Map<Matrix<tinytype, NSTATES, NSTATES, Eigen::RowMajor>>(AmBKt_data);
-    cache.coeff_d2p[0] = Eigen::Map<Matrix<tinytype, NSTATES, NINPUTS, Eigen::RowMajor>>(coeff_d2p_data);
-
-    cache.Adyn[1] = Eigen::Map<Matrix<tinytype, NSTATES, NSTATES, Eigen::RowMajor>>(Adyn_data);
-    cache.Bdyn[1] = Eigen::Map<Matrix<tinytype, NSTATES, NINPUTS, Eigen::RowMajor>>(Bdyn_data);
-    cache.rho[1] = rho_constrained_value;
-    cache.Kinf[1] = Eigen::Map<Matrix<tinytype, NINPUTS, NSTATES, Eigen::RowMajor>>(Kinf_constrained_data);
-    cache.Pinf[1] = Eigen::Map<Matrix<tinytype, NSTATES, NSTATES, Eigen::RowMajor>>(Pinf_constrained_data);
-    cache.Quu_inv[1] = Eigen::Map<Matrix<tinytype, NINPUTS, NINPUTS, Eigen::RowMajor>>(Quu_inv_constrained_data);
-    cache.AmBKt[1] = Eigen::Map<Matrix<tinytype, NSTATES, NSTATES, Eigen::RowMajor>>(AmBKt_constrained_data);
-    cache.coeff_d2p[1] = Eigen::Map<Matrix<tinytype, NSTATES, NINPUTS, Eigen::RowMajor>>(coeff_d2p_constrained_data);
-
-    struct tiny_params params;
-    params.Q[0] = Eigen::Map<tiny_VectorNx>(Q_data);
-    params.Qf[0] = Eigen::Map<tiny_VectorNx>(Qf_data);
-    params.R[0] = Eigen::Map<tiny_VectorNu>(R_data);
-    params.Q[1] = Eigen::Map<tiny_VectorNx>(Q_constrained_data);
-    params.Qf[1] = Eigen::Map<tiny_VectorNx>(Qf_constrained_data);
-    params.R[1] = Eigen::Map<tiny_VectorNu>(R_constrained_data);
-    tinytype u_hover[4] = {.65, .65, .65, .65};
-    params.u_min = tiny_VectorNu(-u_hover[0], -u_hover[1], -u_hover[2], -u_hover[3]).replicate<1, NHORIZON-1>();
-    params.u_max = tiny_VectorNu(1 - u_hover[0], 1 - u_hover[1], 1 - u_hover[2], 1 - u_hover[3]).replicate<1, NHORIZON-1>();
-    for (int i=0; i<NHORIZON; i++) {
-        params.x_min[i] = tiny_VectorNc::Constant(-1000); // Currently unused
-        // params.x_max[i] = tiny_VectorNc::Zero();
-        params.x_max[i] = tiny_VectorNc::Constant(1000);
-        // params.x_max[i](0) = x_max_given[i];
-        params.A_constraints[i] = tiny_MatrixNcNx::Zero();
-        // for (int j=0; j<3; j++) {
-        //     params.A_constraints[i](j) = A_ineq_given[j][i];
-        // }
-    }
-    params.Xref = tiny_MatrixNxNh::Zero();
-    params.Uref = tiny_MatrixNuNhm1::Zero();
-    params.cache = cache;
-
-    struct tiny_problem problem;
-    problem.x = tiny_MatrixNxNh::Zero();
-    problem.q = tiny_MatrixNxNh::Zero();
-    problem.p = tiny_MatrixNxNh::Zero();
-    problem.v = tiny_MatrixNxNh::Zero();
-    problem.vnew = tiny_MatrixNxNh::Zero();
-    problem.g = tiny_MatrixNxNh::Zero();
-
-    problem.u = tiny_MatrixNuNhm1::Zero();
-    problem.r = tiny_MatrixNuNhm1::Zero();
-    problem.d = tiny_MatrixNuNhm1::Zero();
-    problem.z = tiny_MatrixNuNhm1::Zero();
-    problem.znew = tiny_MatrixNuNhm1::Zero();
-    problem.y = tiny_MatrixNuNhm1::Zero();
-
-    problem.primal_residual_state = 0;
-    problem.primal_residual_input = 0;
-    problem.dual_residual_state = 0;
-    problem.dual_residual_input = 0;
-    problem.abs_tol = 0.001;
-    problem.status = 0;
-    problem.iter = 0;
-    problem.max_iter = 20;
-    problem.cache_level = 0; // 0 to use rho corresponding to inactive constraints (1 to use rho corresponding to active constraints)
-
     // Copy reference trajectory into Eigen matrix
     Matrix<tinytype, NSTATES, NTOTAL, Eigen::ColMajor> Xref_total = Eigen::Map<Matrix<tinytype, NTOTAL, NSTATES, Eigen::RowMajor>>(Xref_data).transpose();
     Matrix<tinytype, NSTATES, 1> Xref_origin;
     Xref_origin << Xref_total.col(0).head(3), 0, 0, 0, 0, 0, 0, 0, 0, 0; // Go to xyz start of traj
-
+    
     params.Xref = Xref_total.block<NSTATES, NHORIZON>(0, mpc_iter);
     // params.Xref = Xref_origin.replicate<1,NHORIZON>();
     // problem.x.col(0) = params.Xref.col(0);
@@ -210,7 +210,6 @@ void julia_sim_wrapper_solve_admm(float x[NSTATES][NHORIZON], float u[NINPUTS][N
     problem.u = problem_u;
 
     // std::cout << params.Xref << std::endl;
-
 
     Eigen::Matrix<tinytype, 3, 1> obs_center;
     obs_center << 0, 0, .8;
@@ -229,7 +228,6 @@ void julia_sim_wrapper_solve_admm(float x[NSTATES][NHORIZON], float u[NINPUTS][N
         q_c = obs_center - r_obs*a_norm;
         params.x_max[i](0) = a_norm.transpose() * q_c;
     }
-
     solve_admm(&problem, &params);
 
     // std::cout << "done" << std::endl;
